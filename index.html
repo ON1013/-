@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
-  <title>主播分類（雲端版）</title>
+  <title>主播分類</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 24px; }
     header { display: flex; gap: 12px; margin-bottom: 16px; justify-content: center; }
@@ -15,15 +15,10 @@
     .hint { margin-top: 4px; color: #666; font-size: 13px; }
     .del-btn { margin-left: 6px; padding: 4px 6px; font-size: 12px; }
   </style>
-
-  <!-- Firebase SDK -->
-  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"></script>
 </head>
-
 <body>
   <header>
-    <input id="search" type="search" placeholder="輸入名稱或類別關鍵字（可用空白分隔）" />
+    <input id="search" type="search" placeholder="輸入名稱或類別關鍵字（可同時輸入多個，用空白分隔）" />
     <button id="resetSearch">清除篩選</button>
   </header>
 
@@ -36,7 +31,7 @@
       <input id="anchorLink" required placeholder="影片連結 (含 http/https)" />
       <button type="submit">新增主播</button>
     </form>
-    <div class="hint">類別會自動建立（雲端同步）。</div>
+    <div class="hint">類別會自動建立。</div>
   </section>
 
   <section>
@@ -53,8 +48,11 @@
     </table>
   </section>
 
-  <script>
-    /* -------------------- Firebase Config -------------------- */
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
+    import { getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js";
+
+    // 🔹 你的 Firebase config
     const firebaseConfig = {
       apiKey: "AIzaSyAes1VeIHOe6pwvfTEG1KgbKrV8wSl-UgI",
       authDomain: "wjo-1212.firebaseapp.com",
@@ -65,52 +63,34 @@
       measurementId: "G-TP77PBY465"
     };
 
-    const app = firebase.initializeApp(firebaseConfig);
-    const db = firebase.firestore();
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
 
-    /* -------------------- Local State -------------------- */
+    // Firestore collections
+    const categoriesCol = collection(db, 'categories');
+    const anchorsCol = collection(db, 'anchors');
+
+    // DOM
+    const anchorForm = document.getElementById('anchorForm');
+    const anchorName = document.getElementById('anchorName');
+    const anchorCategory = document.getElementById('anchorCategory');
+    const categoryList = document.getElementById('categoryList');
+    const anchorLink = document.getElementById('anchorLink');
+    const anchorTable = document.getElementById('anchorTable');
+    const searchInput = document.getElementById('search');
+    const resetSearch = document.getElementById('resetSearch');
+    const sortByNameBtn = document.getElementById('sortByName');
+    const sortByCategoryBtn = document.getElementById('sortByCategory');
+    let sortMode = 'name';
+
     let categories = [];
     let anchors = [];
 
-    /* -------------------- DOM -------------------- */
-    const anchorForm = document.getElementById("anchorForm");
-    const anchorName = document.getElementById("anchorName");
-    const anchorCategory = document.getElementById("anchorCategory");
-    const categoryList = document.getElementById("categoryList");
-    const anchorLink = document.getElementById("anchorLink");
-    const anchorTable = document.getElementById("anchorTable");
-    const searchInput = document.getElementById("search");
-    const resetSearch = document.getElementById("resetSearch");
-    const sortByNameBtn = document.getElementById("sortByName");
-    const sortByCategoryBtn = document.getElementById("sortByCategory");
-
-    let sortMode = "name";
-
-    /* -------------------- Firestore Sync -------------------- */
-
-    function loadFromFirestore() {
-      db.collection("anchors").onSnapshot((snapshot) => {
-        anchors = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        categories = [...new Set(anchors.map(a => a.category))];
-        renderCategoryOptions();
-        renderAnchors();
-      });
-    }
-
-    function saveAnchorToFirestore(item) {
-      return db.collection("anchors").add(item);
-    }
-
-    function deleteFromFirestore(id) {
-      return db.collection("anchors").doc(id).delete();
-    }
-
-    /* -------------------- UI Rendering -------------------- */
-
+    // 渲染類別選單
     function renderCategoryOptions() {
-      categoryList.innerHTML = "";
+      categoryList.innerHTML = '';
       categories.forEach(c => {
-        const opt = document.createElement("option");
+        const opt = document.createElement('option');
         opt.value = c;
         categoryList.appendChild(opt);
       });
@@ -122,24 +102,111 @@
 
     function renderAnchors() {
       const tokens = getTokens();
-      anchorTable.innerHTML = "";
+      anchorTable.innerHTML = '';
 
-      let grouped;
-
-      if (sortMode === "name") {
-        grouped = new Map();
-        anchors.forEach(a => {
+      if (sortMode === 'name') {
+        const grouped = new Map();
+        anchors.forEach((a, idx) => {
           if (!grouped.has(a.name)) grouped.set(a.name, []);
-          grouped.get(a.name).push(a);
+          grouped.get(a.name).push({ idx, category: a.category, link: a.link, id: a.id });
         });
 
         [...grouped.entries()]
           .filter(([name, list]) => {
             if (!tokens.length) return true;
             const nameLower = name.toLowerCase();
-            const categories = [...new Set(list.map(i => i.category.toLowerCase()))];
-            return tokens.every(t => nameLower.includes(t) || categories.some(c => c.includes(t)));
+            const categoriesLower = [...new Set(list.map(i => i.category.toLowerCase()))];
+            return tokens.every(t => nameLower.includes(t) || categoriesLower.some(c => c.includes(t)));
           })
           .forEach(([name, list]) => {
             const cats = [...new Set(list.map(i => i.category))]
-              .map(c => `<span class="tag">${
+              .map(c => `<span class="tag">${c}</span>`).join(' ');
+            const links = list
+              .map(i => `
+                <div>
+                  <a href="${i.link}" target="_blank" rel="noopener noreferrer">${i.link}</a>
+                  <button class="del-btn" onclick="deleteAnchor('${i.id}')">刪除</button>
+                </div>
+              `).join('');
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${name}</td><td>${cats}</td><td>${links}</td>`;
+            anchorTable.appendChild(tr);
+          });
+      } else {
+        const grouped = new Map();
+        anchors.forEach((a, idx) => {
+          if (!grouped.has(a.category)) grouped.set(a.category, []);
+          grouped.get(a.category).push({ idx, name: a.name, link: a.link, id: a.id });
+        });
+
+        [...grouped.entries()]
+          .filter(([cat, list]) => {
+            if (!tokens.length) return true;
+            const catLower = cat.toLowerCase();
+            const namesLower = [...new Set(list.map(i => i.name.toLowerCase()))];
+            return tokens.every(t => catLower.includes(t) || namesLower.some(n => n.includes(t)));
+          })
+          .forEach(([cat, list]) => {
+            const names = [...new Set(list.map(i => i.name))].map(n => `<span class="tag">${n}</span>`).join(' ');
+            const links = list.map(i => `
+              <div>
+                ${i.name}：
+                <a href="${i.link}" target="_blank" rel="noopener noreferrer">${i.link}</a>
+                <button class="del-btn" onclick="deleteAnchor('${i.id}')">刪除</button>
+              </div>
+            `).join('');
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${names}</td><td><span class="tag">${cat}</span></td><td>${links}</td>`;
+            anchorTable.appendChild(tr);
+          });
+      }
+    }
+
+    // 刪除
+    window.deleteAnchor = async function(id) {
+      if (!id) return;
+      const anchorDoc = doc(db, 'anchors', id);
+      if (confirm('確定刪除這個主播？')) {
+        await deleteDoc(anchorDoc);
+      }
+    }
+
+    // 監聽 Firestore
+    onSnapshot(categoriesCol, snapshot => {
+      categories = snapshot.docs.map(doc => doc.data().name);
+      renderCategoryOptions();
+    });
+
+    onSnapshot(anchorsCol, snapshot => {
+      anchors = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      renderAnchors();
+    });
+
+    // 新增主播 / 類別
+    anchorForm.addEventListener('submit', async e => {
+      e.preventDefault();
+      const name = anchorName.value.trim();
+      const category = anchorCategory.value.trim();
+      const link = anchorLink.value.trim();
+      if (!name || !category || !link) return;
+
+      if (!categories.includes(category)) {
+        await addDoc(categoriesCol, { name: category });
+      }
+
+      await addDoc(anchorsCol, { name, category, link });
+      anchorName.value = '';
+      anchorCategory.value = '';
+      anchorLink.value = '';
+    });
+
+    // 搜尋 / 重置
+    searchInput.addEventListener('input', renderAnchors);
+    resetSearch.addEventListener('click', () => { searchInput.value = ''; renderAnchors(); });
+
+    // 排序
+    sortByNameBtn.addEventListener('click', () => { sortMode = 'name'; renderAnchors(); });
+    sortByCategoryBtn.addEventListener('click', () => { sortMode = 'category'; renderAnchors(); });
+  </script>
+</body>
+</html>
